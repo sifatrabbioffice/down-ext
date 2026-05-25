@@ -1,4 +1,4 @@
-name: RE4 Complete Binary Stripper macOS
+name: RE4 Decompiler to C-Code macOS
 
 on:
   push:
@@ -7,14 +7,20 @@ on:
   workflow_dispatch:
 
 jobs:
-  deep-extract:
+  decompile-binary:
     runs-on: macos-latest
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Download IPA file
+    - name: Install Java & Ghidra (Decompiler Engine)
+      run: |
+        echo "Installing Dependencies via Homebrew..."
+        brew install openjdk@17
+        brew install --cask ghidra
+
+    - name: Download RE4 IPA file
       run: |
         curl -L -o app.ipa "https://github.com/Doann7457/tai-ipa/releases/download/jp.co.capcom.RE4US-6462360082-863325402/jp.co.capcom.RE4US-1.0.2-6462360082-863325402.ipa"
 
@@ -23,46 +29,42 @@ jobs:
         mkdir -p extracted_ipa
         unzip app.ipa -d extracted_ipa/
 
-    - name: Deep Extract Binary Strings and System Maps
+    - name: Run Ghidra Decompiler to Generate C-Code
       run: |
-        echo "Locating executable binary file..."
+        echo "Locating RE4 primary binary executable..."
         BINARY_PATH=$(find extracted_ipa -type f -path "*/Resident Evil 4.app/Resident Evil 4" -print -quit)
         
         if [ -n "$BINARY_PATH" ]; then
-            echo "Binary targeted successfully at: $BINARY_PATH"
-            mkdir -p RE4_Full_Binary_Dump
+            echo "Binary found at: $BINARY_PATH"
+            mkdir -p RE4_Decompiled_Source
             
-            echo "--- DUMP 1: Running Absolute Master Dump (All Printable Text) ---"
-            # Captures every single byte segment translated to alphanumeric text (minimum length 4)
-            strings "$BINARY_PATH" > RE4_Full_Binary_Dump/01_master_all_printable_strings.txt || true
+            # Ghidra Headless Analyzer রান করার পাথ সেটআপ
+            GHIDRA_HEADLESS="/Applications/Ghidra.app/Contents/Resources/Ghidra/support/analyzeHeadless"
             
-            echo "--- DUMP 2: Filtering All Multi-Language Source Code Paths ---"
-            # Expanded regex for all software architectures (C, C++, C#, Python, Swift, Go, Assembler, Headers, Text layout maps)
-            grep -E "\.(cpp|hpp|c|h|swift|m|mm|py|lua|go|cs|txt|java|asm|s|json|yaml|ini|cfg)\b" RE4_Full_Binary_Dump/01_master_all_printable_strings.txt | sort -u > RE4_Full_Binary_Dump/02_developer_source_code_paths.txt || true
+            echo "Starting Deep Decompilation into C-Style Pseudo-Code..."
+            # Ghidra ব্যাকগ্রাউন্ডে প্রজেক্ট তৈরি করে বাইনারি ফাইলটিকে ডিকম্পাইল করে .c ফাইলে কনভার্ট করবে
+            $GHIDRA_HEADLESS . RE4_TmpProj -import "$BINARY_PATH" -postScript Decompile.java RE4_Decompiled_Source/re4_decompiled_logic.c || true
             
-            echo "--- DUMP 3: Filtering RE Engine Proprietary Formats & Engine Asset Paths ---"
-            # Targets explicit CAPCOM RE Engine internal file types (.pak, user configurations, scene components, mesh models, fonts)
-            grep -E "\.(pak|user|scn|pfb|msg|uvs|uvar|mdf2|efx|tex|dds|mesh|motlist|rcol|chain|motbank|gui|aimap)\b" RE4_Full_Binary_Dump/01_master_all_printable_strings.txt | sort -u > RE4_Full_Binary_Dump/03_re_engine_asset_file_paths.txt || true
+            # যদি সম্পূর্ণ গেম বড় হওয়ার কারণে ডিকম্পাইল স্ক্রিপ্ট ফেইলও করে, আমরা যেন একটি স্ট্রাকচারাল রিডআউট পাই
+            if [ ! -f "RE4_Decompiled_Source/re4_decompiled_logic.c" ]; then
+                echo "Falling back to Function Symbols Mapping..."
+                nm -gC "$BINARY_PATH" > RE4_Decompiled_Source/re4_readable_functions_list.txt || true
+            fi
             
-            echo "--- DUMP 4: Extracting URI, API endpoints, Local System Directories ---"
-            # Captures standard Windows backslash routes, Unix forward slash paths, and network endpoints embedded in code
-            grep -E "(^|[a-zA-Z]:\\|/)([^/\\\0]+[/\\\\])+[^/\\\0]+|https?://[a-zA-Z0-9./_-]+" RE4_Full_Binary_Dump/01_master_all_printable_strings.txt | sort -u > RE4_Full_Binary_Dump/04_all_embedded_system_routes.txt || true
+            # আগের এক্সট্রাক্ট করা টেক্সট পাথগুলোও এর সাথে যুক্ত করে দিচ্ছি
+            strings "$BINARY_PATH" | grep -E "\.(cpp|hpp|c|h|swift|m|mm|py|lua|go|cs|txt)\b" | sort -u > RE4_Decompiled_Source/original_file_tree_references.txt || true
             
-            echo "--- DUMP 5: Extracting System Variables & Functions Symbols ---"
-            # Pulls variable chains, function identifiers, internal class configurations, and global objects
-            grep -E "^[a-zA-Z_][a-zA-Z0-9_]{3,49}$" RE4_Full_Binary_Dump/01_master_all_printable_strings.txt | sort -u > RE4_Full_Binary_Dump/05_system_variables_and_symbols.txt || true
-
-            # Compress output directory
-            zip -r re4_complete_binary_analysis.zip RE4_Full_Binary_Dump/
-            echo "Extraction phase completed successfully!"
+            # জিপ ফাইল তৈরি
+            zip -r re4_c_source_code.zip RE4_Decompiled_Source/
+            echo "Success: Decoupled code structures saved into re4_c_source_code.zip"
         else
-            echo "CRITICAL ERROR: Resident Evil 4 Executable cannot be found in the directory tree!"
+            echo "CRITICAL ERROR: 'Resident Evil 4' binary file could not be found!"
             exit 1
         fi
 
-    - name: Upload Binary Analysis Package
+    - name: Save Decompiled C Code Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: RE4-Complete-Binary-Analysis-Dump
-        path: re4_complete_binary_analysis.zip
+        name: RE4-Decompiled-C-Source
+        path: re4_c_source_code.zip
         retention-days: 5
