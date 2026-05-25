@@ -1,4 +1,4 @@
-name: RE4 Pak Auto Extractor macOS
+name: RE4 Complete Binary Stripper macOS
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  extract-and-unpack:
+  deep-extract:
     runs-on: macos-latest
 
     steps:
@@ -23,42 +23,46 @@ jobs:
         mkdir -p extracted_ipa
         unzip app.ipa -d extracted_ipa/
 
-    - name: Extract Original Compilation Code Paths
+    - name: Deep Extract Binary Strings and System Maps
       run: |
-        echo "Locating primary executable binary..."
-        # macOS 'find' syntax optimized to target the App bundle layout safely
+        echo "Locating executable binary file..."
         BINARY_PATH=$(find extracted_ipa -type f -path "*/Resident Evil 4.app/Resident Evil 4" -print -quit)
         
         if [ -n "$BINARY_PATH" ]; then
-            echo "Found binary executable file at: $BINARY_PATH"
-            mkdir -p Source_Code_Paths
+            echo "Binary targeted successfully at: $BINARY_PATH"
+            mkdir -p RE4_Full_Binary_Dump
             
-            echo "Extracting internal compilation paths..."
-            # Expanded regex to capture c, cpp, h, hpp, swift, m, mm, py, lua, go, cs, and txt extensions
-            strings "$BINARY_PATH" | grep -E "\.(cpp|hpp|c|h|swift|m|mm|py|lua|go|cs|txt)\b" | sort -u > Source_Code_Paths/original_developer_source_paths.txt || true
+            echo "--- DUMP 1: Running Absolute Master Dump (All Printable Text) ---"
+            # Captures every single byte segment translated to alphanumeric text (minimum length 4)
+            strings "$BINARY_PATH" > RE4_Full_Binary_Dump/01_master_all_printable_strings.txt || true
             
-            # Extract structural asset reference maps/json/system strings
-            strings "$BINARY_PATH" | grep -E "(^|[a-zA-Z]:\\|/)([^/\\\0]+[/\\\\])+[^/\\\0]+" | sort -u > Source_Code_Paths/all_embedded_system_paths.txt || true
+            echo "--- DUMP 2: Filtering All Multi-Language Source Code Paths ---"
+            # Expanded regex for all software architectures (C, C++, C#, Python, Swift, Go, Assembler, Headers, Text layout maps)
+            grep -E "\.(cpp|hpp|c|h|swift|m|mm|py|lua|go|cs|txt|java|asm|s|json|yaml|ini|cfg)\b" RE4_Full_Binary_Dump/01_master_all_printable_strings.txt | sort -u > RE4_Full_Binary_Dump/02_developer_source_code_paths.txt || true
             
-            # Package the structural maps up
-            zip -r re4_source_code_paths.zip Source_Code_Paths/
-            echo "Success: Code execution path map generated into re4_source_code_paths.zip"
+            echo "--- DUMP 3: Filtering RE Engine Proprietary Formats & Engine Asset Paths ---"
+            # Targets explicit CAPCOM RE Engine internal file types (.pak, user configurations, scene components, mesh models, fonts)
+            grep -E "\.(pak|user|scn|pfb|msg|uvs|uvar|mdf2|efx|tex|dds|mesh|motlist|rcol|chain|motbank|gui|aimap)\b" RE4_Full_Binary_Dump/01_master_all_printable_strings.txt | sort -u > RE4_Full_Binary_Dump/03_re_engine_asset_file_paths.txt || true
+            
+            echo "--- DUMP 4: Extracting URI, API endpoints, Local System Directories ---"
+            # Captures standard Windows backslash routes, Unix forward slash paths, and network endpoints embedded in code
+            grep -E "(^|[a-zA-Z]:\\|/)([^/\\\0]+[/\\\\])+[^/\\\0]+|https?://[a-zA-Z0-9./_-]+" RE4_Full_Binary_Dump/01_master_all_printable_strings.txt | sort -u > RE4_Full_Binary_Dump/04_all_embedded_system_routes.txt || true
+            
+            echo "--- DUMP 5: Extracting System Variables & Functions Symbols ---"
+            # Pulls variable chains, function identifiers, internal class configurations, and global objects
+            grep -E "^[a-zA-Z_][a-zA-Z0-9_]{3,49}$" RE4_Full_Binary_Dump/01_master_all_printable_strings.txt | sort -u > RE4_Full_Binary_Dump/05_system_variables_and_symbols.txt || true
+
+            # Compress output directory
+            zip -r re4_complete_binary_analysis.zip RE4_Full_Binary_Dump/
+            echo "Extraction phase completed successfully!"
         else
-            echo "CRITICAL ERROR: 'Resident Evil 4' binary file could not be found!"
+            echo "CRITICAL ERROR: Resident Evil 4 Executable cannot be found in the directory tree!"
             exit 1
         fi
 
-    # Note: Ensure your unpacking script outputs to 'Extracted_Output' if you want this step to find files.
-    - name: Save Extracted Pak Assets Artifact
+    - name: Upload Binary Analysis Package
       uses: actions/upload-artifact@v4
       with:
-        name: Extracted-RE4-Assets
-        path: Extracted_Output/
-        retention-days: 3
-
-    - name: Save Original Source Paths Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: Resident-Evil-4-Original-Source-Paths
-        path: re4_source_code_paths.zip
-        retention-days: 3
+        name: RE4-Complete-Binary-Analysis-Dump
+        path: re4_complete_binary_analysis.zip
+        retention-days: 5
