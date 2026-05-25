@@ -1,4 +1,4 @@
-name: RE4 Packed Mach-O Reverse Engineering
+name: RE4 Pak Auto Extractor macOS
 
 on:
   push:
@@ -8,24 +8,11 @@ on:
 
 jobs:
   extract-and-unpack:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-
-    - name: Install Advanced Binary Toolchains
-      run: |
-        sudo dpkg --add-architecture i386
-        sudo apt-get update
-        # Added radare2 for automated binary unpacking and pattern carving
-        sudo apt-get install -y wine wine32 wine64 unrar p7zip-full zip binutils llvm clang radare2
-
-    - name: Install IPSW Engine & Toolchains
-      run: |
-        echo "Installing blacktop/ipsw toolchain..."
-        curl -sS https://webi.sh/ipsw | sh
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
 
     - name: Download IPA file
       run: |
@@ -36,64 +23,32 @@ jobs:
         mkdir -p extracted_ipa
         unzip app.ipa -d extracted_ipa/
 
-    - name: Download and Extract FluffyQuack REtool
+    - name: Extract Original Compilation Code Paths
       run: |
-        curl -L -o REtool.rar "http://www.fluffyquack.com/tools/REtool.rar"
-        mkdir -p Utils temp_extracted
-        unrar x -o+ REtool.rar temp_extracted/
-        FOUND_RETOOL=$(find temp_extracted/ -iname "retool.exe" -print -quit)
-        if [ -n "$FOUND_RETOOL" ]; then
-            mv "$FOUND_RETOOL" Utils/retool.exe
-            rm -rf temp_extracted
-        else
-            echo "Failed to locate retool.exe"
-            exit 1
-        fi
-
-    - name: Unpack Pak Assets via Wine
-      run: |
-        WORKSPACE_DIR=$(pwd)
-        PAK_PATH=$(find "$WORKSPACE_DIR/extracted_ipa" -name "re_chunk_000.pak" -print -quit)
-        RETOOL_PATH="$WORKSPACE_DIR/Utils/retool.exe"
-        
-        if [ -n "$PAK_PATH" ]; then
-            mkdir -p "$WORKSPACE_DIR/Extracted_Output"
-            cd "$WORKSPACE_DIR/Extracted_Output"
-            wine "$RETOOL_PATH" -re4 -extract "$PAK_PATH" . || true
-            cd "$WORKSPACE_DIR"
-        else
-            exit 1
-        fi
-
-    - name: Unpack, Decrypt-Check, and Decompile Mach-O Layout
-      run: |
-        BINARY_PATH=$(find extracted_ipa/ -path "*/Resident Evil 4.app/Resident Evil 4" -print -quit)
+        echo "Locating primary executable binary..."
+        # macOS 'find' syntax optimized to target the App bundle layout safely
+        BINARY_PATH=$(find extracted_ipa -type f -path "*/Resident Evil 4.app/Resident Evil 4" -print -quit)
         
         if [ -n "$BINARY_PATH" ]; then
-            mkdir -p Advanced_RE_Extraction
+            echo "Found binary executable file at: $BINARY_PATH"
+            mkdir -p Source_Code_Paths
             
-            echo "=== 1. Checking Apple DRM Encryption State ==="
-            # This identifies if cryptid is 1 (Protected by FairPlay DRM) or 0 (Decrypted)
-            ipsw macho info "$BINARY_PATH" | grep -E "crypt|encryption" > Advanced_RE_Extraction/drm_status.txt || true
+            echo "Extracting internal compilation paths..."
+            # Expanded regex to capture c, cpp, h, hpp, swift, m, mm, py, lua, go, cs, and txt extensions
+            strings "$BINARY_PATH" | grep -E "\.(cpp|hpp|c|h|swift|m|mm|py|lua|go|cs|txt)\b" | sort -u > Source_Code_Paths/original_developer_source_paths.txt || true
             
-            echo "=== 2. Carving Packed Code Patterns (Radare2) ==="
-            # Uses radare2 to analyze references, entry points, and structural maps 
-            # even if sections of the code are obfuscated or packed.
-            r2 -q -c "aa; af; pdf" "$BINARY_PATH" > Advanced_RE_Extraction/r2_control_flow.txt || true
+            # Extract structural asset reference maps/json/system strings
+            strings "$BINARY_PATH" | grep -E "(^|[a-zA-Z]:\\|/)([^/\\\0]+[/\\\\])+[^/\\\0]+" | sort -u > Source_Code_Paths/all_embedded_system_paths.txt || true
             
-            echo "=== 3. Extracting Reconstructed Headers ==="
-            # Attempts to extract runtime Objective-C frameworks/classes metadata layouts
-            ipsw macho class-dump "$BINARY_PATH" > Advanced_RE_Extraction/reconstructed_engine_classes.h || true
-            
-            echo "=== 4. Advanced Disassembly with Demangled Symbols ==="
-            llvm-objdump -d --macho --demangle --symbol-description "$BINARY_PATH" > Advanced_RE_Extraction/disassembled_assembly.asm || true
-            
-            zip -r re4_reversed_macho.zip Advanced_RE_Extraction/
+            # Package the structural maps up
+            zip -r re4_source_code_paths.zip Source_Code_Paths/
+            echo "Success: Code execution path map generated into re4_source_code_paths.zip"
         else
-            echo "Binary not found"
+            echo "CRITICAL ERROR: 'Resident Evil 4' binary file could not be found!"
             exit 1
         fi
 
+    # Note: Ensure your unpacking script outputs to 'Extracted_Output' if you want this step to find files.
     - name: Save Extracted Pak Assets Artifact
       uses: actions/upload-artifact@v4
       with:
@@ -101,9 +56,9 @@ jobs:
         path: Extracted_Output/
         retention-days: 3
 
-    - name: Save Reverse Engineering Analysis Pack
+    - name: Save Original Source Paths Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: RE4-MachO-Reverse-Engineering-Pack
-        path: re4_reversed_macho.zip
+        name: Resident-Evil-4-Original-Source-Paths
+        path: re4_source_code_paths.zip
         retention-days: 3
