@@ -1,0 +1,116 @@
+name: RE4 Pak Auto Extractor ubuntu
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  extract-and-unpack:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install Wine and Binary Analysis Tools
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt-get update
+        # Added binutils and llvm for cross-platform binary analysis (objdump/strings)
+        sudo apt-get install -y wine wine32 wine64 unrar p7zip-full zip binutils llvm
+
+    - name: Download IPA file
+      run: |
+        curl -L -o app.ipa "https://github.com/Doann7457/tai-ipa/releases/download/jp.co.capcom.RE4US-6462360082-863325402/jp.co.capcom.RE4US-1.0.2-6462360082-863325402.ipa"
+
+    - name: Extract IPA
+      run: |
+        mkdir -p extracted_ipa
+        unzip app.ipa -d extracted_ipa/
+
+    - name: Download and Extract FluffyQuack REtool
+      run: |
+        echo "Downloading compiled REtool..."
+        curl -L -o REtool.rar "http://www.fluffyquack.com/tools/REtool.rar"
+        
+        echo "Extracting RAR package..."
+        mkdir -p Utils
+        mkdir -p temp_extracted
+        unrar x -o+ REtool.rar temp_extracted/
+        
+        FOUND_RETOOL=$(find temp_extracted/ -iname "retool.exe" -print -quit)
+        if [ -n "$FOUND_RETOOL" ]; then
+            mv "$FOUND_RETOOL" Utils/retool.exe
+            echo "Success: retool.exe sits ready in Utils/."
+            rm -rf temp_extracted
+        else
+            echo "Failed to locate retool.exe inside the archive."
+            exit 1
+        fi
+
+    - name: Find Pak File and Unpack via Wine
+      run: |
+        WORKSPACE_DIR=$(pwd)
+        PAK_PATH=$(find "$WORKSPACE_DIR/extracted_ipa" -name "re_chunk_000.pak" -print -quit)
+        RETOOL_PATH="$WORKSPACE_DIR/Utils/retool.exe"
+        
+        if [ -n "$PAK_PATH" ]; then
+            echo "Found target file at: $PAK_PATH"
+            mkdir -p "$WORKSPACE_DIR/Extracted_Output"
+            cd "$WORKSPACE_DIR/Extracted_Output"
+            
+            wine "$RETOOL_PATH" -re4 -extract "$PAK_PATH" . || true
+            
+            cd "$WORKSPACE_DIR"
+            if [ "$(ls -A Extracted_Output)" ]; then
+                echo "Extraction verified successfully! Files found in Extracted_Output."
+            else
+                echo "CRITICAL ERROR: Extracted_Output is empty."
+                exit 1
+            fi
+        else
+            echo "CRITICAL ERROR: re_chunk_000.pak was not found inside the Extracted IPA!"
+            exit 1
+        fi
+
+    - name: Isolate, Dump Code Strings, and Zip Binary
+      run: |
+        echo "Locating the primary executable file..."
+        BINARY_PATH=$(find extracted_ipa/ -path "*/Resident Evil 4.app/Resident Evil 4" -print -quit)
+        
+        if [ -n "$BINARY_PATH" ]; then
+            echo "Found binary executable file at: $BINARY_PATH"
+            mkdir -p Isolated_Binary
+            cp "$BINARY_PATH" Isolated_Binary/
+            
+            echo "--- ANALYZING COMPILED CODE ---"
+            # 1. Extract all human-readable embedded strings (minimum 6 characters long)
+            strings -n 6 "Isolated_Binary/Resident Evil 4" > Isolated_Binary/extracted_code_strings.txt
+            
+            # 2. Dump the structural Mach-O load commands and headers using LLVM
+            llvm-objdump -h "Isolated_Binary/Resident Evil 4" > Isolated_Binary/binary_header_layout.txt
+            
+            echo "Analysis files created successfully."
+            
+            # Zip everything inside the folder together
+            zip -j re4_executable_and_analysis.zip Isolated_Binary/*
+        else
+            echo "CRITICAL ERROR: 'Resident Evil 4' binary file could not be found!"
+            exit 1
+        fi
+
+    - name: Save Extracted Pak Assets Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Extracted-RE4-Assets
+        path: Extracted_Output/
+        retention-days: 3
+
+    - name: Save Compiled Code Analysis and Zip Binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: Resident-Evil-4-Compiled-Code-Analysis
+        path: re4_executable_and_analysis.zip
+        retention-days: 3
