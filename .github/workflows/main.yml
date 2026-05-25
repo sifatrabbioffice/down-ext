@@ -14,11 +14,10 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Install Wine and Binary Analysis Tools
+    - name: Install Wine, Binary Tools, and Dependencies
       run: |
         sudo dpkg --add-architecture i386
         sudo apt-get update
-        # Added binutils and llvm for cross-platform binary analysis (objdump/strings)
         sudo apt-get install -y wine wine32 wine64 unrar p7zip-full zip binutils llvm
 
     - name: Download IPA file
@@ -75,27 +74,26 @@ jobs:
             exit 1
         fi
 
-    - name: Isolate, Dump Code Strings, and Zip Binary
+    - name: Extract Original Compilation Code Paths
       run: |
-        echo "Locating the primary executable file..."
+        echo "Locating primary executable binary..."
         BINARY_PATH=$(find extracted_ipa/ -path "*/Resident Evil 4.app/Resident Evil 4" -print -quit)
         
         if [ -n "$BINARY_PATH" ]; then
             echo "Found binary executable file at: $BINARY_PATH"
-            mkdir -p Isolated_Binary
-            cp "$BINARY_PATH" Isolated_Binary/
+            mkdir -p Source_Code_Paths
             
-            echo "--- ANALYZING COMPILED CODE ---"
-            # 1. Extract all human-readable embedded strings (minimum 6 characters long)
-            strings -n 6 "Isolated_Binary/Resident Evil 4" > Isolated_Binary/extracted_code_strings.txt
+            echo "Extracting internal compilation paths..."
+            # Strings out the binary data, then uses grep to target code file extensions
+            # It sorts them and removes duplicates so you get a clean path layout tree
+            strings "$BINARY_PATH" | grep -E "\.(cpp|hpp|c|h|swift|m|mm|py|lua|go)\b" | sort -u > Source_Code_Paths/original_developer_source_paths.txt || true
             
-            # 2. Dump the structural Mach-O load commands and headers using LLVM
-            llvm-objdump -h "Isolated_Binary/Resident Evil 4" > Isolated_Binary/binary_header_layout.txt
+            # Also extract structural asset reference maps/json strings if they exist
+            strings "$BINARY_PATH" | grep -E "(^|[a-zA-Z]:\\|/)([^/\\\0]+[/\\\\])+[^/\\\0]+" | sort -u > Source_Code_Paths/all_embedded_system_paths.txt || true
             
-            echo "Analysis files created successfully."
-            
-            # Zip everything inside the folder together
-            zip -j re4_executable_and_analysis.zip Isolated_Binary/*
+            # Package the structural maps up
+            zip -r re4_source_code_paths.zip Source_Code_Paths/
+            echo "Success: Code execution path map generated into re4_source_code_paths.zip"
         else
             echo "CRITICAL ERROR: 'Resident Evil 4' binary file could not be found!"
             exit 1
@@ -108,9 +106,9 @@ jobs:
         path: Extracted_Output/
         retention-days: 3
 
-    - name: Save Compiled Code Analysis and Zip Binary
+    - name: Save Original Source Paths Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Resident-Evil-4-Compiled-Code-Analysis
-        path: re4_executable_and_analysis.zip
+        name: Resident-Evil-4-Original-Source-Paths
+        path: re4_source_code_paths.zip
         retention-days: 3
