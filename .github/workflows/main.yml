@@ -14,11 +14,25 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Install Java & Ghidra (Decompiler Engine)
+    - name: Install Java (Required for Ghidra)
       run: |
-        echo "Installing Dependencies via Homebrew..."
+        echo "Installing OpenJDK 17 via Homebrew..."
         brew install openjdk@17
-        brew install --cask ghidra
+        # জাভার এনভায়রনমেন্ট পাথ রানারকে চিনিয়ে দেওয়া হচ্ছে
+        echo "JAVA_HOME=$(brew --prefix openjdk@17)" >> $GITHUB_ENV
+        echo "$(brew --prefix openjdk@17)/bin" >> $GITHUB_PATH
+
+    - name: Download and Setup Ghidra (Direct Release)
+      run: |
+        echo "Downloading Ghidra from official GitHub releases..."
+        # সরাসরি Ghidra v11.1.2 ডাউনলোড করা হচ্ছে (হোমব্রু এর ঝামেলা এড়াতে)
+        curl -L -o ghidra.zip "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.1.2_build/ghidra_11.1.2_PUBLIC_20240709.zip"
+        
+        echo "Extracting Ghidra..."
+        unzip -q ghidra.zip
+        # সহজে অ্যাক্সেস করার জন্য ফোল্ডার রিনেম করা হচ্ছে
+        mv ghidra_11.1.2_PUBLIC ghidra_app
+        chmod +x ghidra_app/support/analyzeHeadless
 
     - name: Download RE4 IPA file
       run: |
@@ -27,7 +41,7 @@ jobs:
     - name: Extract IPA
       run: |
         mkdir -p extracted_ipa
-        unzip app.ipa -d extracted_ipa/
+        unzip -q app.ipa -d extracted_ipa/
 
     - name: Run Ghidra Decompiler to Generate C-Code
       run: |
@@ -38,23 +52,23 @@ jobs:
             echo "Binary found at: $BINARY_PATH"
             mkdir -p RE4_Decompiled_Source
             
-            # Ghidra Headless Analyzer রান করার পাথ সেটআপ
-            GHIDRA_HEADLESS="/Applications/Ghidra.app/Contents/Resources/Ghidra/support/analyzeHeadless"
+            # সরাসরি ডাউনলোড করা হেডলেস অ্যানালাইজারের পাথ সেট করা হলো
+            GHIDRA_HEADLESS="./ghidra_app/support/analyzeHeadless"
             
             echo "Starting Deep Decompilation into C-Style Pseudo-Code..."
-            # Ghidra ব্যাকগ্রাউন্ডে প্রজেক্ট তৈরি করে বাইনারি ফাইলটিকে ডিকম্পাইল করে .c ফাইলে কনভার্ট করবে
+            # Ghidra ব্যাকগ্রাউন্ড প্রজেক্ট খুলে বাইনারিটি অ্যানালাইসিস করবে
             $GHIDRA_HEADLESS . RE4_TmpProj -import "$BINARY_PATH" -postScript Decompile.java RE4_Decompiled_Source/re4_decompiled_logic.c || true
             
-            # যদি সম্পূর্ণ গেম বড় হওয়ার কারণে ডিকম্পাইল স্ক্রিপ্ট ফেইলও করে, আমরা যেন একটি স্ট্রাকচারাল রিডআউট পাই
+            # কোনো কারণে গেম সাইজ বেশি বড় হওয়ায় ফুল ডিকম্পাইল আটকে গেলে ফাংশন ম্যাপ ব্যাকআপ হিসেবে তৈরি হবে
             if [ ! -f "RE4_Decompiled_Source/re4_decompiled_logic.c" ]; then
-                echo "Falling back to Function Symbols Mapping..."
+                echo "Creating Fallback Function Symbols Mapping..."
                 nm -gC "$BINARY_PATH" > RE4_Decompiled_Source/re4_readable_functions_list.txt || true
             fi
             
-            # আগের এক্সট্রাক্ট করা টেক্সট পাথগুলোও এর সাথে যুক্ত করে দিচ্ছি
+            # আপনার রিকোয়েস্ট করা কোড পাথ ট্র্যাকিং ফাইল
             strings "$BINARY_PATH" | grep -E "\.(cpp|hpp|c|h|swift|m|mm|py|lua|go|cs|txt)\b" | sort -u > RE4_Decompiled_Source/original_file_tree_references.txt || true
             
-            # জিপ ফাইল তৈরি
+            # রেজাল্ট জিপ করা হচ্ছে
             zip -r re4_c_source_code.zip RE4_Decompiled_Source/
             echo "Success: Decoupled code structures saved into re4_c_source_code.zip"
         else
